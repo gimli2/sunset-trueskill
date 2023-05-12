@@ -25,9 +25,9 @@ print(url)
 
 
 class Player:
-    def __init__(self, name='Nobody', rating=Rating()):
+    def __init__(self, name='Nobody', rating=None):
         self.name = name
-        self.rating = rating
+        self.rating = rating if rating is not None else Rating()
         self.rating_history = []
         self.matches = []
 
@@ -54,6 +54,8 @@ class Player:
 class Team:
     def __init__(self, name='Team', players: dict = None, min_players=0):
         self.name = name
+        self.history = []
+        self.matches = []
         if players is None:
             if min_players == 0:
                 self.players = dict()
@@ -81,6 +83,12 @@ class Team:
         p = list(self.players.values())
         p.sort(reverse=True)
         return p[0:n]
+
+    def count_avg_score(self, n=None):
+        if n is None:
+            return sum(map(lambda x: float(x.rating), self.players.values())) / len(self.players)
+        else:
+            return sum(map(lambda x: float(x.rating), self.get_players_top(n))) / n
 
     def __len__(self):
         return len(self.players)
@@ -115,18 +123,18 @@ def preprocess_history():
         df.to_pickle(CACHEFN)
 
     df.rename(columns={
-        '113': 'Date',
-        'Unnamed: 1': 'Tournament',
-        'Unnamed: 2': 'Oponent',
+        'Datum': 'Date',
+        'Turnaj': 'Tournament',
     }, inplace=True)
+
     # sanitize emojis from names
     orig_pl_names = df.columns[10:]
     clear_names = [sanitize_name(n).strip() for n in orig_pl_names]
     rename_dict = {k: v for k, v in zip(orig_pl_names, clear_names)}
     df.rename(columns=rename_dict, inplace=True)
 
-    df.dropna(subset=['Date'], inplace=True)  # skip empty lines
     df.drop(index=0, inplace=True)  # skip summary line
+    df.dropna(subset=['Date'], inplace=True)  # skip empty lines
     df['Date'] = pd.to_datetime(df['Date'], format='%d.%m.%Y')  # make date as datetime
     return df
 
@@ -166,6 +174,11 @@ def process_match(teams: dict, sunset: Team, matchid, match: pd.Series):
     for i, p in enumerate(t_opo):
         oponent.players[p.name].rating = opo_new_r[i]  # no care about rating history
 
+    sunset.matches.append(matchid)
+    sunset.history.append(sunset.count_avg_score())
+    oponent.matches.append(matchid)
+    oponent.history.append(oponent.count_avg_score(7))
+
     # print(sunset)
     # print(oponent)
 
@@ -193,12 +206,12 @@ df.sort_values(by=['Date'], inplace=True)
 df = df.reset_index()
 for i, row in df.iterrows():
     match_names.append(f"{row['Tournament']} ({row['Oponent']})")
-    # if not re.match('.*MCR.*', row['Tournament'], re.IGNORECASE) and not re.match('.*Kvalif.*', row['Tournament'], re.IGNORECASE):
     if re.match('.*Paluf.*', row['Tournament'], re.IGNORECASE):
-        print(i, row['Date'], row['Tournament'])
-        teams, sunset = process_match(teams, sunset, i - 1, row)  # lets count always from 0
+    # if not re.match('.*MCR.*', row['Tournament'], re.IGNORECASE) and not re.match('.*Kvalif.*', row['Tournament'], re.IGNORECASE):
+        # print(i, row['Date'], row['Tournament'])
+        teams, sunset = process_match(teams, sunset, i, row)  # lets count always from 0
 
-
+# sunset players
 print('-' * 80)
 print('top sunset:')
 
@@ -210,8 +223,10 @@ for p in sunset.get_players_top():
     x = p.matches
     if len(x) == 0:
         continue
-    ax.plot(x, p.rating_history, label=p.name)
-    ax.annotate(p.name, xy=(x[-1], p.rating_history[-1]))
+    line = ax.plot(x, p.rating_history, label=p.name)
+    c = line[0].get_c()
+    ax.plot(x[-1], p.rating_history[-1], color=c, alpha=0.5, marker='o', markersize=2 * p.rating_history[-1].sigma)
+    ax.annotate(f'{p.name} ({p.rating_history[-1].sigma:.1f})', xy=(x[-1], float(p.rating_history[-1]) + 0.2), color=c)
 
 
 # ax.legend(bbox_to_anchor=(1.1, 1.05))
@@ -223,5 +238,37 @@ ax.xaxis.set_major_locator(MultipleLocator(1))
 ax.grid()
 # ax.set_title('Sunset frisbee - TrueSkill score\n(no MCR, no kvalifikace)')
 ax.set_title('Sunset frisbee - TrueSkill score\n(only PALUF)')
-plt.savefig('sunset_trueskill_only(paluf).png', bbox_inches='tight')
+plt.savefig('sunset_trueskill_paluf-only.png', bbox_inches='tight')
+# plt.savefig('sunset_trueskill_no(MCR,kval).png', bbox_inches='tight')
+plt.show()
+
+# team history stats
+fig = plt.figure(figsize=(30, 9))
+ax = fig.add_subplot(111)
+
+for t in teams.values():
+    # print(t.name, t.matches, t.history)
+    x = t.matches
+    if len(x) == 0:
+        continue
+    line = ax.plot(x, t.history, label=t.name, marker='o')
+    c = line[0].get_c()
+    ax.annotate(f'{t.name} ({t.history[-1]:.1f})', xy=(x[-1], float(t.history[-1]) + 0.05), color=c)
+
+t = sunset
+x = t.matches
+c = '#000000'
+line = ax.plot(x, t.history, label=t.name, marker='o', color=c, lw=3, alpha=0.75)
+ax.annotate(f'{t.name} ({t.history[-1]:.1f})', xy=(x[-1], float(t.history[-1]) + 0.05), color=c)
+
+# ax.legend(bbox_to_anchor=(1.1, 1.05))
+ticks = np.arange(0, len(match_names), 1)
+# print(len(ticks), ticks)
+ax.set_xticks(ticks)
+ax.set_xticklabels(match_names, rotation=90)
+ax.xaxis.set_major_locator(MultipleLocator(1))
+ax.grid()
+ax.set_title('Sunset frisbee - TrueSkill score history')
+# ax.set_title('Sunset frisbee - TrueSkill score\n(only PALUF)')
+plt.savefig('sunset_history.png', bbox_inches='tight')
 plt.show()
